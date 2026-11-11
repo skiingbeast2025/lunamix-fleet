@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+logs/
+*.tmp
+*.bak
+telemetry_state.json
+status_server.log
+proxies.json

@@ -1,0 +1,13 @@
+{
+  "supabase_rest_url": "https://xvkjvuxhawlljakfkllu.supabase.co/rest/v1",
+  "supabase_functions_url": "https://xvkjvuxhawlljakfkllu.supabase.co/functions/v1",
+  "supabase_anon_key": "sb_publishable_uyxd5lS77wdXpD56QF_lgg_zaujLjZZ",
+  "supabase_service_role_key": "",
+  "csv_filename": "simulated_accounts.csv",
+  "num_accounts": 133,
+  "messages_per_user": 999999999999,
+  "min_delay_seconds": 5.2,
+  "max_delay_seconds": 7.5,
+  "use_random_names": true,
+  "name_prefix": "User"
+}

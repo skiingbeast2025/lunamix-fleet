@@ -1,0 +1,14 @@
+{
+  "supabase_rest_url": "https://xvkjvuxhawlljakfkllu.supabase.co/rest/v1",
+  "supabase_functions_url": "https://xvkjvuxhawlljakfkllu.supabase.co/functions/v1",
+  "supabase_anon_key": "sb_publishable_uyxd5lS77wdXpD56QF_lgg_zaujLjZZ",
+  "bot_count": "all",
+  "min_delay_per_bot": 5.11,
+  "max_delay_per_bot": 5.260000000000001,
+  "autostart_on_boot": true,
+  "web_dashboard_port": 8088,
+  "web_dashboard_enabled": true,
+  "csv_file": "simulated_accounts.csv",
+  "banned_csv_file": "banned_accounts.csv",
+  "paused": false
+}

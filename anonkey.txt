@@ -1,0 +1,21 @@
+2. The Anon Key Used in Rocky Games
+The key is embedded in plain text inside economy.js:
+
+javascript
+
+
+const SUPABASE_URL = 'https://elxnypvvwrumhwakczwe.supabase.co';
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVseG55cHZ2d3J1bWh3YWtjendlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTMxNTk0OTAsImV4cCI6MjEwODczNTQ5MH0.j3jNeub4wRWFeW_FCtA2fGm310lmVNlV_UqpwnrE-Yw';
+If you decode that JWT token, its payload reveals:
+
+json
+
+
+{
+  "iss": "supabase",
+  "ref": "elxnypvvwrumhwakczwe",
+  "role": "anon",
+  "iat": 1793159490,
+  "exp": 2108735490
+}
+This confirms the role is set to anon for project reference elxnypvvwrumhwakczwe.
