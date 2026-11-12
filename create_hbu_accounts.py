@@ -177,8 +177,84 @@ def _select_proxy(worker_id: int, ctx: _BatchContext) -> tuple[bool, Optional[st
     return True, proxy_url
 
 
+def _fetch_challenge_fast(
+    worker_id: int,
+    ctx: _BatchContext,
+) -> tuple[str, Optional[str], Optional[dict[str, Any]]]:
+    """
+    Fetch an image challenge quickly. In proxy mode, races up to 4 proxies in
+    parallel with a tight 2.8s timeout so dead proxies never stall the user.
+    Returns (outcome, proxy_url, challenge_data) where outcome is 'ok', 'retry', or 'no_route'.
+    """
+    # For small pools (<= 4) or direct mode, use deterministic sequential selection with fast 3.0s timeout.
+    if not ctx.rotator.use_proxies or len(ctx.rotator.proxy_pool) <= 4:
+        has_route, proxy_url = _select_proxy(worker_id, ctx)
+        if not has_route:
+            return "no_route", None, None
+        try:
+            ch_data = fetch_image_challenge(proxy_url=proxy_url, timeout=3.0)
+            return "ok", proxy_url, ch_data
+        except ProxyDeadException as exc:
+            ctx.rotator.mark_failed(proxy_url, reason=f"Fetch failed: {exc}")
+            ctx.emit_proxy(proxy_url, "failed", str(exc))
+            return "retry", proxy_url, None
+        except RateLimitException as exc:
+            ctx.rotator.record_signup(proxy_url)
+            ctx.emit_proxy(proxy_url, "rate_limited", str(exc))
+            return "retry", proxy_url, None
+        except Exception as exc:
+            ctx.emit_status(
+                f"[W{worker_id}] Challenge fetch error via {proxy_url or 'Direct (Local IP)'}: {exc}",
+                worker_id=worker_id,
+            )
+            if proxy_url:
+                ctx.rotator.mark_failed(proxy_url, reason=f"Fetch error: {str(exc)[:60]}")
+                ctx.emit_proxy(proxy_url, "failed", str(exc))
+            return "retry", proxy_url, None
+
+    # Gather up to 4 distinct candidate proxies to race concurrently
+    candidates: list[str] = []
+    seen: set[str] = set()
+    race_width = min(4, max(1, len(ctx.rotator.proxy_pool)))
+    for _ in range(race_width):
+        p = ctx.rotator.get_proxy()
+        if p and p not in seen:
+            seen.add(p)
+            candidates.append(p)
+
+    if not candidates:
+        _select_proxy(worker_id, ctx)
+        return "no_route", None, None
+
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=len(candidates))
+    try:
+        future_map = {
+            executor.submit(fetch_image_challenge, proxy_url=p, timeout=2.8): p
+            for p in candidates
+        }
+        for future in concurrent.futures.as_completed(future_map):
+            p = future_map[future]
+            try:
+                ch_data = future.result()
+                ctx.emit_proxy(p, "selected")
+                return "ok", p, ch_data
+            except ProxyDeadException as exc:
+                ctx.rotator.mark_failed(p, reason=f"Fetch failed: {exc}")
+                ctx.emit_proxy(p, "failed", str(exc))
+            except RateLimitException as exc:
+                ctx.rotator.record_signup(p)
+                ctx.emit_proxy(p, "rate_limited", str(exc))
+            except Exception as exc:
+                ctx.rotator.mark_failed(p, reason=f"Fetch error: {str(exc)[:60]}")
+                ctx.emit_proxy(p, "failed", str(exc))
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
+
+    return "retry", None, None
+
+
 def _create_one_account(worker_id: int, ctx: _BatchContext) -> Optional[dict[str, Any]]:
-    """Attempt to create one human-verified account with proxy failover."""
+    """Attempt to create one human-verified account with fast proxy failover."""
     for _attempt in range(ctx.max_retries):
         if ctx.stop_event.is_set():
             return None
@@ -187,32 +263,15 @@ def _create_one_account(worker_id: int, ctx: _BatchContext) -> Optional[dict[str
             if ctx.created_total >= ctx.count:
                 return None
 
-        has_route, proxy_url = _select_proxy(worker_id, ctx)
-        if not has_route:
+        outcome, proxy_url, ch_data = _fetch_challenge_fast(worker_id, ctx)
+        if outcome == "no_route":
             return None
-        proxy_desc = proxy_url or "Direct (Local IP)"
+        if outcome != "ok" or ch_data is None:
+            continue
 
-        try:
-            ch_data = fetch_image_challenge(proxy_url=proxy_url, timeout=8.0)
-            challenge_id = ch_data["id"]
-            challenge_b64 = ch_data["image"]
-        except ProxyDeadException as exc:
-            ctx.rotator.mark_failed(proxy_url, reason=f"Fetch failed: {exc}")
-            ctx.emit_proxy(proxy_url, "failed", str(exc))
-            continue
-        except RateLimitException as exc:
-            ctx.rotator.record_signup(proxy_url)
-            ctx.emit_proxy(proxy_url, "rate_limited", str(exc))
-            continue
-        except Exception as exc:
-            ctx.emit_status(
-                f"[W{worker_id}] Challenge fetch error via {proxy_desc}: {exc}",
-                worker_id=worker_id,
-            )
-            if proxy_url:
-                ctx.rotator.mark_failed(proxy_url, reason=f"Fetch error: {str(exc)[:60]}")
-                ctx.emit_proxy(proxy_url, "failed", str(exc))
-            continue
+        proxy_desc = proxy_url or "Direct (Local IP)"
+        challenge_id = ch_data["id"]
+        challenge_b64 = ch_data["image"]
 
         if ctx.stop_event.is_set():
             return None
@@ -238,7 +297,7 @@ def _create_one_account(worker_id: int, ctx: _BatchContext) -> Optional[dict[str
                 challenge_answer=answer,
                 student_id=ctx.student_id,
                 proxy_url=proxy_url,
-                timeout=12.0,
+                timeout=6.0,
             )
         except ProxyDeadException as exc:
             ctx.rotator.mark_failed(proxy_url, reason=f"Submit failed: {exc}")
