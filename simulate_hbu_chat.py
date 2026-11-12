@@ -46,6 +46,9 @@ except Exception:
     BASE_DIR = os.getcwd()
 
 SETTINGS_FILE = os.path.join(BASE_DIR, "hbu_sim_settings.json")
+LOGS_DIR = os.path.join(BASE_DIR, "logs")
+PID_FILE = os.path.join(LOGS_DIR, "daemon.pid")
+PAUSE_TRIGGER_FILE = os.path.join(LOGS_DIR, ".pause_toggle")
 
 # Default settings
 DEFAULT_SETTINGS = {
@@ -684,14 +687,15 @@ def coin_manager_menu(settings):
 # Parallel Multi-Threaded Simulation Execution Engine
 # ==============================================================================
 
-def execute_simulation(settings, create_new=True, send_messages=True):
+def execute_simulation(settings, create_new=True, send_messages=True, forever=False, headless=False):
     """
     Executes in FULL PARALLEL mode with ANTI-MUTE COMPLIANCE:
     - Enforces >= 5.2s delay per bot (server mutes accounts that send 2 messages in < 5.0s).
     - Velocity is scaled across bots in parallel, preventing all mutes.
-    - Instant responsive shutdown when [Enter] or [Ctrl+C] is pressed.
+    - Instant responsive shutdown when [Enter] or [Ctrl+C] or SIGTERM is received.
     """
-    clear_screen()
+    if not headless:
+        clear_screen()
     safe_print(f"{Style.BOLD}{Style.CYAN}==================================================================={Style.RESET}")
     safe_print(f"{Style.BOLD}{Style.WHITE}          HBU2 Multi-User Parallel Simulation Engine               {Style.RESET}")
     safe_print(f"{Style.BOLD}{Style.CYAN}==================================================================={Style.RESET}\n")
@@ -699,6 +703,7 @@ def execute_simulation(settings, create_new=True, send_messages=True):
     csv_file = settings["csv_filename"]
     stop_simulation = threading.Event()
     msgs_per_user = settings["messages_per_user"]
+    is_tty = sys.stdin is not None and hasattr(sys.stdin, "isatty") and sys.stdin.isatty() and not headless
     
     # Enforce safe delay: Server spamCheck() mutes any user sending 2 msgs in < 5.0s
     min_del = max(5.2, float(settings.get("min_delay_seconds", 5.2)))
@@ -712,23 +717,32 @@ def execute_simulation(settings, create_new=True, send_messages=True):
     safe_print(f"{Style.YELLOW}[*] Anti-Mute Guard Active:{Style.RESET} Each bot paces messages by {min_del:.1f}s - {max_del:.1f}s")
     safe_print(f"{Style.DIM}    (Server automatically mutes any account sending 2 messages within 5.0 seconds).{Style.RESET}")
     safe_print(f"{Style.GREEN}[*] Total Room Velocity: Scaled across parallel bots simultaneously.{Style.RESET}")
-    safe_print(f"\n{Style.BOLD}{Style.YELLOW}>> PRESS [ENTER] OR [Ctrl+C] AT ANY TIME TO STOP THE SIMULATION <<{Style.RESET}\n")
+    if is_tty:
+        safe_print(f"\n{Style.BOLD}{Style.YELLOW}>> PRESS [ENTER] OR [Ctrl+C] AT ANY TIME TO STOP THE SIMULATION <<{Style.RESET}\n")
+    else:
+        safe_print(f"\n{Style.BOLD}{Style.YELLOW}>> RUNNING IN BACKGROUND / HEADLESS MODE (Forever={forever}) <<{Style.RESET}\n")
 
     def stdin_stop_listener():
+        if not is_tty:
+            return
         while not stop_simulation.is_set():
             try:
                 # Non-blocking poll for stdin input on posix
                 r, _, _ = select.select([sys.stdin], [], [], 0.1)
                 if r:
-                    _ = sys.stdin.readline()
+                    line = sys.stdin.readline()
+                    if not line:
+                        # EOF on stdin (e.g. /dev/null); do not trigger keyboard stop
+                        break
                     stop_simulation.set()
                     safe_print(f"\n{Style.YELLOW}{Style.BOLD}[!] STOP REQUESTED VIA KEYBOARD (Enter). Halting all bots...{Style.RESET}")
                     break
             except Exception:
                 break
 
-    listener_thread = threading.Thread(target=stdin_stop_listener, daemon=True)
-    listener_thread.start()
+    if is_tty:
+        listener_thread = threading.Thread(target=stdin_stop_listener, daemon=True)
+        listener_thread.start()
 
     def individual_account_chatter(acc, initial_stagger=0.0):
         uname = acc["username"]
@@ -737,8 +751,9 @@ def execute_simulation(settings, create_new=True, send_messages=True):
         if stop_simulation.wait(initial_stagger):
             return
 
-        for msg_i in range(msgs_per_user):
-            if stop_simulation.is_set():
+        msg_i = 0
+        while not stop_simulation.is_set():
+            if not forever and msg_i >= msgs_per_user:
                 break
 
             msg = random.choice(CHAT_MESSAGES)
@@ -749,7 +764,10 @@ def execute_simulation(settings, create_new=True, send_messages=True):
             if stop_simulation.is_set():
                 break
 
-            safe_print(f"  {Style.CYAN}[💬 {uname}]{Style.RESET} Msg ({msg_i+1}/{msgs_per_user}): \"{msg}\"... ", end="", flush=True)
+            if forever:
+                safe_print(f"  {Style.CYAN}[💬 {uname}]{Style.RESET} Msg (#{msg_i+1}): \"{msg}\"... ", end="", flush=True)
+            else:
+                safe_print(f"  {Style.CYAN}[💬 {uname}]{Style.RESET} Msg ({msg_i+1}/{msgs_per_user}): \"{msg}\"... ", end="", flush=True)
 
             success, result = send_chat_message(
                 settings["supabase_functions_url"],
@@ -767,21 +785,31 @@ def execute_simulation(settings, create_new=True, send_messages=True):
             else:
                 safe_print(f"{Style.RED}✗ {result}{Style.RESET}")
 
-            if msg_i < msgs_per_user - 1 and not stop_simulation.is_set():
+            msg_i += 1
+            if (forever or msg_i < msgs_per_user) and not stop_simulation.is_set():
                 bot_delay = random.uniform(min_del, max_del)
                 if stop_simulation.wait(bot_delay):
                     break
 
-        if not stop_simulation.is_set():
+        if not stop_simulation.is_set() and not forever:
             safe_print(f"  {Style.GREEN}[✓ {uname}]{Style.RESET} Finished sending all {msgs_per_user} messages.")
 
-    # Signal handler for clean Ctrl+C
+    # Signal handler for clean Ctrl+C and SIGTERM
     def sig_handler(sig, frame):
         stop_simulation.set()
         safe_print(f"\n{Style.YELLOW}{Style.BOLD}[!] Interrupt signal received. Stopping all bots...{Style.RESET}")
 
     is_main_thread = threading.current_thread() is threading.main_thread()
     old_sigint = signal.signal(signal.SIGINT, sig_handler) if is_main_thread else None
+    old_sigterm = signal.signal(signal.SIGTERM, sig_handler) if is_main_thread else None
+
+    if headless:
+        try:
+            os.makedirs(LOGS_DIR, exist_ok=True)
+            with open(PID_FILE, "w", encoding="utf-8") as pf:
+                pf.write(str(os.getpid()))
+        except Exception:
+            pass
 
     try:
         if create_new:
@@ -825,16 +853,21 @@ def execute_simulation(settings, create_new=True, send_messages=True):
                     break
 
         elif send_messages and not create_new:
-            existing = load_accounts_from_csv(csv_file)
-            if not existing:
+            while not stop_simulation.is_set():
+                existing = load_accounts_from_csv(csv_file)
+                if existing:
+                    break
                 safe_print(f"{Style.RED}[!] No accounts found in '{csv_file}'. Create accounts first.{Style.RESET}")
-                input(f"\nPress Enter to return to menu...")
-                return
+                if is_tty:
+                    input(f"\nPress Enter to return to menu...")
+                    return
+                if not forever or stop_simulation.wait(5.0):
+                    return
 
             # Check bot count to avoid overwhelming the system
             configured_count = settings.get("num_accounts", 10)
             target_accounts = existing
-            if len(existing) > configured_count:
+            if is_tty and len(existing) > configured_count:
                 safe_print(f"{Style.BOLD}Found {len(existing)} accounts in '{csv_file}'.{Style.RESET}")
                 safe_print(f"  {Style.BOLD}[1]{Style.RESET} Launch configured amount ({Style.CYAN}{configured_count}{Style.RESET} bots)")
                 safe_print(f"  {Style.BOLD}[2]{Style.RESET} Launch ALL {Style.YELLOW}{len(existing)}{Style.RESET} bots from CSV")
@@ -847,7 +880,11 @@ def execute_simulation(settings, create_new=True, send_messages=True):
 
             safe_print(f"\n{Style.GREEN}[*] Launching {len(target_accounts)} parallel bot threads!{Style.RESET}\n")
             interval_step = 5.0 / max(1, len(target_accounts))
+            active_usernames = set()
             for idx, acc in enumerate(target_accounts):
+                uname = acc.get("username", "")
+                if uname:
+                    active_usernames.add(uname)
                 stagger = idx * interval_step + random.uniform(0.1, 0.4)
                 t = threading.Thread(target=individual_account_chatter, args=(acc, stagger), daemon=True)
                 worker_threads.append(t)
@@ -855,10 +892,26 @@ def execute_simulation(settings, create_new=True, send_messages=True):
 
         if worker_threads:
             safe_print(f"\n{Style.DIM}[*] Running parallel bot chat streams... (Press Enter anytime to stop){Style.RESET}")
+            last_csv_reload = time.time()
             while any(t.is_alive() for t in worker_threads):
                 if stop_simulation.is_set():
                     break
-                time.sleep(0.1)
+                # Hot-reload newly added accounts from CSV when running Option 2 forever
+                if forever and send_messages and not create_new and (time.time() - last_csv_reload >= 10.0):
+                    last_csv_reload = time.time()
+                    try:
+                        latest = load_accounts_from_csv(csv_file)
+                        for acc in latest:
+                            uname = acc.get("username", "")
+                            if uname and uname not in active_usernames:
+                                active_usernames.add(uname)
+                                safe_print(f"  {Style.GREEN}[+ Hot-Reload]{Style.RESET} Launching chat thread for new account '{uname}'")
+                                t = threading.Thread(target=individual_account_chatter, args=(acc, random.uniform(0.2, 1.5)), daemon=True)
+                                worker_threads.append(t)
+                                t.start()
+                    except Exception:
+                        pass
+                time.sleep(0.2)
 
             # If stop was requested, join threads up to 1.5s to cleanly terminate all socket calls
             if stop_simulation.is_set():
@@ -880,8 +933,21 @@ def execute_simulation(settings, create_new=True, send_messages=True):
         safe_print(f"\n{Style.RED}[!] Simulation interrupted by user.{Style.RESET}")
     finally:
         stop_simulation.set()
+        if headless:
+            try:
+                if os.path.exists(PID_FILE):
+                    with open(PID_FILE, "r", encoding="utf-8") as pf:
+                        if pf.read().strip() == str(os.getpid()):
+                            os.remove(PID_FILE)
+            except Exception:
+                pass
         if old_sigint is not None:
             signal.signal(signal.SIGINT, old_sigint)
+        if old_sigterm is not None:
+            signal.signal(signal.SIGTERM, old_sigterm)
+
+    if not is_tty:
+        return
 
     # Flush any buffered Enter keypresses so they don't leak into subsequent prompts
     try:
@@ -1154,7 +1220,7 @@ def main_tui():
         elif choice == "1":
             execute_simulation(settings, create_new=True, send_messages=True)
         elif choice == "2":
-            execute_simulation(settings, create_new=False, send_messages=True)
+            execute_simulation(settings, create_new=False, send_messages=True, forever=True)
         elif choice == "3":
             execute_simulation(settings, create_new=True, send_messages=False)
         elif choice == "4":
@@ -1187,7 +1253,9 @@ if __name__ == "__main__":
     parser.add_argument("-i", "--interactive", action="store_true", help="Launch interactive TUI (default)")
     parser.add_argument("--mock", action="store_true", help="Run local mock dry-run test")
     parser.add_argument("--run", action="store_true", help="Run full simulation with saved settings non-interactively")
-    parser.add_argument("--chat", action="store_true", help="Run existing accounts chat simulation non-interactively")
+    parser.add_argument("--chat", action="store_true", help="Run existing accounts chat simulation (Option 2) forever")
+    parser.add_argument("--forever", action="store_true", help="Loop chat messages indefinitely")
+    parser.add_argument("--headless", action="store_true", help="Run in background/daemon mode without interactive prompts")
     parser.add_argument("--gui", action="store_true", help="Launch Graphical Controller alongside simulator")
     args = parser.parse_args()
 
@@ -1200,8 +1268,8 @@ if __name__ == "__main__":
     if args.mock:
         execute_local_mock_test(load_settings())
     elif args.run:
-        execute_simulation(load_settings(), create_new=True, send_messages=True)
+        execute_simulation(load_settings(), create_new=True, send_messages=True, forever=args.forever, headless=args.headless)
     elif args.chat:
-        execute_simulation(load_settings(), create_new=False, send_messages=True)
+        execute_simulation(load_settings(), create_new=False, send_messages=True, forever=True, headless=args.headless)
     else:
         main_tui()

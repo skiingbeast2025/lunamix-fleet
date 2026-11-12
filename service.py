@@ -129,14 +129,14 @@ def get_telemetry():
 # ==============================================================================
 
 SYSTEMD_UNIT_CONTENT = f"""[Unit]
-Description=HBU2 Simulation 24/7 Background Service
+Description=HBU2 Simulation 24/7 Background Service (simulate_hbu_chat.py Option 2)
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
 WorkingDirectory={BASE_DIR}
-ExecStart={sys.executable} {os.path.join(BASE_DIR, 'daemon_hbu_sim.py')}
+ExecStart={sys.executable} {os.path.join(BASE_DIR, 'simulate_hbu_chat.py')} --chat --forever --headless
 Restart=always
 RestartSec=5
 MemoryMax=250M
@@ -223,11 +223,11 @@ def start_service(mock=False):
         except Exception:
             pass
 
-    daemon_script = os.path.join(BASE_DIR, "daemon_hbu_sim.py")
+    daemon_script = os.path.join(BASE_DIR, "simulate_hbu_chat.py")
 
-    cmd = [sys.executable, daemon_script]
+    cmd = [sys.executable, daemon_script, "--chat", "--forever", "--headless"]
     if mock:
-        cmd.append("--mock")
+        cmd = [sys.executable, os.path.join(BASE_DIR, "daemon_hbu_sim.py"), "--mock"]
 
     try:
         # Start completely detached from this terminal session (start_new_session=True)
