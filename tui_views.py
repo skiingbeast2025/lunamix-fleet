@@ -413,10 +413,11 @@ def _build_overview_tab(svc: Any, ctrl: _OverviewController) -> TuiTab:
             )
 
             ctrl_y = top + 11
-            if ctrl_y + 2 < top + height:
+            if ctrl_y + 3 < top + height:
                 safe_addstr(stdscr, ctrl_y, lx, ("-" * min(width - 4, 74)), muted_attr)
                 safe_addstr(stdscr, ctrl_y + 1, lx, "[S] Start   [X] Stop    [P] Pause/Resume   [T] Autostart"[: width - 4], def_attr)
                 safe_addstr(stdscr, ctrl_y + 2, lx, "[B] Bots    [D] Delay   [G] GitHub Sync    [W] Web Dashboard"[: width - 4], def_attr)
+                safe_addstr(stdscr, ctrl_y + 3, lx, "[C] Create Accounts     [F] Bot Progress   [1-4] Switch Tabs"[: width - 4], title_attr)
         else:
             cx = left + 2
             cw = max(10, width - 4)
@@ -430,6 +431,7 @@ def _build_overview_tab(svc: Any, ctrl: _OverviewController) -> TuiTab:
                 ("", def_attr),
                 ("[S] Start  [X] Stop  [P] Pause  [T] Autostart", muted_attr),
                 ("[B] Bots   [D] Delay [G] Sync   [W] Web", muted_attr),
+                ("[C] Create Accounts  [F] Bot Progress", title_attr),
             ]
             if busy:
                 lines.insert(6, (f"Task      : {busy}...", warn_attr))
@@ -440,6 +442,16 @@ def _build_overview_tab(svc: Any, ctrl: _OverviewController) -> TuiTab:
                 safe_addstr(stdscr, y, cx, txt[:cw], attr)
 
     def handle_key(ch: int, app: TuiApp, state: Dict[str, Any]) -> bool:
+        if ch in (ord("c"), ord("C")):
+            if len(app.tabs) > 2:
+                app.active_tab_idx = 2
+            return True
+
+        if ch in (ord("f"), ord("F")):
+            if len(app.tabs) > 1:
+                app.active_tab_idx = 1
+            return True
+
         if ch in (ord("s"), ord("S")):
             ctrl.run_async(app, "Starting daemon", lambda: svc.start_service())
             return True

@@ -427,7 +427,7 @@ def main():
 
     p_create = subparsers.add_parser("create", help="Batch create accounts via proxy rotator")
     p_create.add_argument("count", type=int, default=10, nargs="?", help="Number of accounts to create (default: 10)")
-    p_create.add_argument("--threads", "-c", type=int, default=3, help="Worker threads")
+    p_create.add_argument("--threads", "-c", type=int, default=1, help="Worker threads (default: 1)")
     p_create.add_argument("--direct", action="store_true", help="Force direct connection")
 
     p_sync = subparsers.add_parser("sync", help="Sync all project files and code edits to GitHub")
@@ -469,6 +469,13 @@ def main():
         print(f"Uptime       : {telem.get('uptime_str', '00:00:00')}")
         print(f"Active Bots  : {telem.get('active_bots', 0)}")
     elif args.command == "progress":
+        if sys.stdin.isatty() and sys.stdout.isatty():
+            try:
+                from tui_views import launch_tui
+                launch_tui(sys.modules[__name__], start_tab=1)
+                return
+            except Exception:
+                pass
         progress_screen()
     elif args.command == "autostart":
         if args.action == "on":
