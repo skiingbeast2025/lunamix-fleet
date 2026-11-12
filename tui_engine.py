@@ -406,9 +406,10 @@ class InlineModal:
         prompt: str,
         initial: str = "",
         colors: Optional[Dict[str, int]] = None,
+        preview_lines: Optional[List[str]] = None,
     ) -> Optional[str]:
         """
-        Show a centered text input modal.
+        Show a centered text input modal with optional preview lines above the prompt.
         Returns the entered string on Enter, or None on Esc.
         """
         pal = colors or {}
@@ -428,8 +429,14 @@ class InlineModal:
         try:
             while True:
                 max_y, max_x = stdscr.getmaxyx()
-                box_w = min(max(36, len(prompt) + 6, len(title) + 8), max(20, max_x - 4))
-                box_h = 7
+                raw_preview = list(preview_lines) if preview_lines else []
+                max_preview = max(0, max_y - 9)
+                vis_preview = raw_preview[:max_preview] if raw_preview and max_preview > 0 else []
+                preview_w = max((_display_width(ln) for ln in vis_preview), default=0)
+
+                box_w = min(max(36, len(prompt) + 6, len(title) + 8, preview_w + 4), max(20, max_x - 2))
+                preview_offset = (len(vis_preview) + 1) if vis_preview else 0
+                box_h = 7 + preview_offset
                 if max_y < box_h or max_x < 20:
                     return None
 
@@ -441,18 +448,24 @@ class InlineModal:
                     safe_addstr(stdscr, r, left_x, " " * box_w, text_attr)
 
                 draw_box(stdscr, title=title, attr=border_attr, y=top_y, x=left_x, height=box_h, width=box_w)
-                safe_addstr(stdscr, top_y + 2, left_x + 2, prompt[: box_w - 4], text_attr)
+
+                if vis_preview:
+                    for idx, pline in enumerate(vis_preview):
+                        safe_addstr(stdscr, top_y + 2 + idx, left_x + 2, pline, text_attr)
+
+                prompt_y = top_y + 2 + preview_offset
+                safe_addstr(stdscr, prompt_y, left_x + 2, prompt[: box_w - 4], text_attr)
 
                 field_w = max(8, box_w - 4)
                 full_str = "".join(buf)
                 # Scroll input horizontally if longer than field_w - 1
                 scroll_x = max(0, cursor_pos - field_w + 1)
                 visible_str = full_str[scroll_x : scroll_x + field_w]
-                safe_addstr(stdscr, top_y + 3, left_x + 2, visible_str.ljust(field_w), input_attr)
-                safe_addstr(stdscr, top_y + 5, left_x + 2, "[Enter] Save   [Esc] Cancel"[: box_w - 4], muted_attr)
+                safe_addstr(stdscr, prompt_y + 1, left_x + 2, visible_str.ljust(field_w), input_attr)
+                safe_addstr(stdscr, prompt_y + 3, left_x + 2, "[Enter] Save   [Esc] Cancel"[: box_w - 4], muted_attr)
 
                 try:
-                    stdscr.move(top_y + 3, min(left_x + 2 + (cursor_pos - scroll_x), max_x - 2))
+                    stdscr.move(prompt_y + 1, min(left_x + 2 + (cursor_pos - scroll_x), max_x - 2))
                 except curses.error:
                     pass
 

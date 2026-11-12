@@ -171,11 +171,12 @@ class _CreatorController:
                 "has_pending_prompt": self._pending_prompt is not None,
             }
 
-    def tui_input_fn(self, prompt_text: str) -> str:
+    def tui_input_fn(self, prompt_text: str, preview_lines: Optional[List[str]] = None) -> str:
         """Called from worker thread; blocks until main curses thread shows InlineModal."""
         evt = threading.Event()
         req: Dict[str, Any] = {
             "prompt": prompt_text,
+            "preview_lines": preview_lines,
             "event": evt,
             "result": "skip",
         }
@@ -193,6 +194,18 @@ class _CreatorController:
 
         return str(req.get("result") or "skip")
 
+    def tui_challenge_handler(self, b64_image: str) -> Optional[str]:
+        """Render the challenge image in-terminal inside the TUI modal and validate input."""
+        from hbu_challenge_ui import (
+            PROMPT_TEXT,
+            render_svg_to_terminal_lines,
+            validate_challenge_answer,
+        )
+
+        preview_lines = render_svg_to_terminal_lines(b64_image, width=64)
+        raw = self.tui_input_fn(PROMPT_TEXT, preview_lines=preview_lines)
+        return validate_challenge_answer(raw)
+
     def process_pending_prompt(self, stdscr: Any, app: TuiApp) -> None:
         """Called on the main curses thread during render to display any queued prompt."""
         with self.lock:
@@ -208,6 +221,7 @@ class _CreatorController:
                 prompt=str(req.get("prompt") or "Enter 6-char code (or 'skip'):"),
                 initial="",
                 colors=app.colors,
+                preview_lines=req.get("preview_lines"),
             )
             req["result"] = answer.strip() if answer is not None and answer.strip() else "skip"
         finally:
@@ -286,6 +300,7 @@ class _CreatorController:
                     use_proxies=use_proxies,
                     on_event=_on_event,
                     stop_event=stop_ev,
+                    challenge_handler=self.tui_challenge_handler,
                     input_fn=self.tui_input_fn,
                 )
                 app.show_toast(

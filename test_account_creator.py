@@ -110,64 +110,45 @@ class TestHbuChallengeUI(unittest.TestCase):
         for invalid in (None, 123456, "", "   ", "AB234", "AB23456", "skip", "  SKIP "):
             self.assertIsNone(hbu_challenge_ui.validate_challenge_answer(invalid))  # type: ignore[arg-type]
 
-    def test_present_challenge_to_human_creates_and_cleans_up_temp_file(self):
-        observed_paths: list[str] = []
+    def test_render_svg_to_terminal_lines_produces_block_art(self):
+        lines = hbu_challenge_ui.render_svg_to_terminal_lines(SAMPLE_SVG_B64, width=60)
+        self.assertGreaterEqual(len(lines), 4)
+        self.assertTrue(all(len(ln) == 60 for ln in lines))
+        joined = "".join(lines)
+        self.assertTrue(any(ch in joined for ch in ("█", "▀", "▄")))
 
-        def fake_open(url: str) -> bool:
-            self.assertTrue(url.startswith("file://"))
-            path = url[len("file://"):]
-            observed_paths.append(path)
-            self.assertTrue(os.path.isfile(path))
-            with open(path, "r", encoding="utf-8") as f:
-                html = f.read()
-            self.assertIn(f"data:image/svg+xml;base64,{SAMPLE_SVG_B64}", html)
-            return True
+    def test_present_challenge_to_human_renders_in_terminal_and_validates(self):
+        printed: list[str] = []
 
-        with mock.patch("hbu_challenge_ui.webbrowser.open", side_effect=fake_open):
-            result = hbu_challenge_ui.present_challenge_to_human(
-                SAMPLE_SVG_B64,
-                input_fn=lambda _prompt: "  me4a48 ",
-            )
-
+        result = hbu_challenge_ui.present_challenge_to_human(
+            SAMPLE_SVG_B64,
+            input_fn=lambda _prompt: "  me4a48 ",
+            output_fn=printed.append,
+            width=48,
+        )
         self.assertEqual(result, "ME4A48")
-        self.assertEqual(len(observed_paths), 1)
-        self.assertFalse(os.path.exists(observed_paths[0]))
+        output_blob = "\n".join(printed)
+        self.assertIn("HBU2 VERIFICATION IMAGE", output_blob)
 
-    def test_present_challenge_cleans_up_on_skip_interrupt_and_browser_error(self):
-        created_paths: list[str] = []
-
-        def failing_open(url: str) -> bool:
-            created_paths.append(url[len("file://"):])
-            raise RuntimeError("No GUI browser available")
-
-        with mock.patch("hbu_challenge_ui.webbrowser.open", side_effect=failing_open):
-            # Browser failure falls back cleanly to input_fn
-            res_valid = hbu_challenge_ui.present_challenge_to_human(
-                SAMPLE_SVG_B64,
-                input_fn=lambda _prompt: "W7X8Y9",
-            )
-            self.assertEqual(res_valid, "W7X8Y9")
-
-            # Skip returns None
-            res_skip = hbu_challenge_ui.present_challenge_to_human(
+        # Skip and EOFError return None cleanly
+        self.assertIsNone(
+            hbu_challenge_ui.present_challenge_to_human(
                 SAMPLE_SVG_B64,
                 input_fn=lambda _prompt: "skip",
+                output_fn=None,
             )
-            self.assertIsNone(res_skip)
+        )
 
-            # KeyboardInterrupt / EOFError returns None and still unlinks temp file
-            def raise_eof(_prompt: str) -> str:
-                raise EOFError("stdin closed")
+        def raise_eof(_prompt: str) -> str:
+            raise EOFError("stdin closed")
 
-            res_eof = hbu_challenge_ui.present_challenge_to_human(
+        self.assertIsNone(
+            hbu_challenge_ui.present_challenge_to_human(
                 SAMPLE_SVG_B64,
                 input_fn=raise_eof,
+                output_fn=None,
             )
-            self.assertIsNone(res_eof)
-
-        self.assertEqual(len(created_paths), 3)
-        for path in created_paths:
-            self.assertFalse(os.path.exists(path))
+        )
 
 
 class TestHbuAuthClient(unittest.TestCase):
