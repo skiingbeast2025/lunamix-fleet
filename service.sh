@@ -11,6 +11,8 @@
 #   ./service.sh status     -> Quick status snapshot
 #   ./service.sh autostart  -> Toggle or check startup on boot
 #   ./service.sh bots <N>   -> Set bot count (number or 'all')
+#   ./service.sh create <N> -> Batch create N accounts via proxy rotator
+#   ./service.sh sync [msg] -> Commit and push all fleet files to private GitHub repo
 # ==============================================================================
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

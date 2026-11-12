@@ -383,173 +383,25 @@ def progress_screen():
 # ==============================================================================
 
 def main_tui():
-    """Main interactive control center."""
-    while True:
-        clear_screen()
-        cfg = load_config()
-        pid = get_daemon_pid()
-        telem = get_telemetry()
-        autostart_active = is_systemd_enabled()
-
-        if pid:
-            if telem.get("paused"):
-                status_str = f"{Color.YELLOW}{Color.BOLD}⏸ PAUSED{Color.RESET} (PID: {pid})"
-            else:
-                status_str = f"{Color.GREEN}{Color.BOLD}● RUNNING{Color.RESET} (PID: {pid})"
-        else:
-            status_str = f"{Color.RED}{Color.BOLD}○ STOPPED{Color.RESET}"
-
-        autostart_str = (
-            f"{Color.GREEN}{Color.BOLD}[● ENABLED]{Color.RESET} - Starts automatically on system boot"
-            if autostart_active
-            else f"{Color.DIM}[○ DISABLED] - Manual start only{Color.RESET}"
+    """Main interactive control center powered by the curses TUI."""
+    if not sys.stdin.isatty() or not sys.stdout.isatty():
+        print(
+            f"{Color.YELLOW}[!] Interactive TUI requires a TTY terminal. "
+            f"Use CLI subcommands (e.g. './service.sh status' or './service.sh --help').{Color.RESET}"
         )
+        return
 
-        bot_count_cfg = cfg.get("bot_count", "all")
-        bot_str = "ALL" if str(bot_count_cfg).lower() == "all" else str(bot_count_cfg)
-        min_delay = cfg.get("min_delay_per_bot", 5.1)
-        sent = telem.get("messages_sent", 0)
-        msgs_min = telem.get("messages_per_minute", 0.0)
-        uptime = telem.get("uptime_str", "00:00:00")
-        dash_port = cfg.get("web_dashboard_port", 8088)
+    try:
+        import curses
+        from tui_views import launch_tui
 
-        print(f"{Color.BLUE}{Color.BOLD}╔══════════════════════════════════════════════════════════════════════╗")
-        print(f"║              HBU2 24/7 DAEMON CONTROLLER & SETTINGS                  ║")
-        print(f"╚══════════════════════════════════════════════════════════════════════╝{Color.RESET}")
-        print(f" Status       : {status_str}  |  Uptime: {uptime}")
-        print(f" Bots Loaded  : {Color.BOLD}{bot_str}{Color.RESET} (from {cfg.get('csv_file', 'simulated_accounts.csv')})")
-        print(f" Pacing Speed : {Color.BOLD}{min_delay:.2f}s{Color.RESET} per bot (Max Anti-Mute Safe Speed)")
-        print(f" Startup Mode : {autostart_str}")
-        print(f" Progress     : {Color.GREEN}{sent:,}{Color.RESET} messages sent  |  {msgs_min:.1f} msgs/min")
-        print(f" Web Dashboard: {Color.CYAN}http://localhost:{dash_port}{Color.RESET}")
-        print("─" * 70)
-        print(f"  {Color.BOLD}[1]{Color.RESET} {Color.GREEN}▶ Start Program Now{Color.RESET} (Detached session: safe to close terminal)")
-        print(f"  {Color.BOLD}[2]{Color.RESET} {Color.YELLOW}⏸ Pause / Resume Sending{Color.RESET} (Instant toggle)")
-        print(f"  {Color.BOLD}[3]{Color.RESET} {Color.RED}⏹ Stop Service{Color.RESET} (Clean shutdown)")
-        print(f"  {Color.BOLD}[4]{Color.RESET} 🤖 Set Bot Count (Current: {Color.BOLD}{bot_str}{Color.RESET})")
-        print(f"  {Color.BOLD}[5]{Color.RESET} ⚡ Configure Speed / Delay (Current: {min_delay:.2f}s)")
-        print(f"  {Color.BOLD}[T]{Color.RESET} 🔄 {Color.CYAN}Toggle Startup on Boot{Color.RESET} [Press T to flip ON/OFF]")
-        print(f"  {Color.BOLD}[P]{Color.RESET} 📊 {Color.WHITE}Check Script Progress{Color.RESET} (Live Terminal Monitor)")
-        print(f"  {Color.BOLD}[W]{Color.RESET} 🌐 Open Web Dashboard in Browser")
-        print(f"  {Color.BOLD}[L]{Color.RESET} 📋 View Rolling Logs")
-        print(f"  {Color.BOLD}[0]{Color.RESET} 🚪 Exit TUI (Service continues in background!)\n")
-
-        choice = input(f"{Color.BOLD}Choose an action [0-9, T, P, W, L]: {Color.RESET}").strip().lower()
-
-        if choice in ("0", "q", "quit", "exit"):
-            clear_screen()
-            print(f"{Color.GREEN}Exiting TUI controller. If the service is running, it will continue in the background!{Color.RESET}")
-            sys.exit(0)
-
-        elif choice == "1":
-            # Start Program Now
-            clear_screen()
-            print(f"{Color.CYAN}[*] Starting 24/7 background service...{Color.RESET}")
-            ok, msg = start_service()
-            if ok:
-                print(f"\n{Color.GREEN}{Color.BOLD}[✓] SUCCESS:{Color.RESET} {msg}")
-                print(f"{Color.WHITE}You can now safely close this terminal window, and the bots will continue running 24/7!{Color.RESET}")
-            else:
-                print(f"\n{Color.YELLOW}[!] {msg}{Color.RESET}")
-            input(f"\n{Color.DIM}Press Enter to return to menu...{Color.RESET}")
-
-        elif choice == "2":
-            # Pause / Resume
-            ok, msg = pause_service()
-            print(f"\n{Color.CYAN}[*] {msg}{Color.RESET}")
-            time.sleep(1.0)
-
-        elif choice == "3":
-            # Stop Service
-            print(f"\n{Color.YELLOW}[*] Stopping service...{Color.RESET}")
-            ok, msg = stop_service()
-            print(f"{Color.GREEN if ok else Color.RED}[*] {msg}{Color.RESET}")
-            time.sleep(1.2)
-
-        elif choice == "4":
-            # Set Bot Count
-            clear_screen()
-            print(f"{Color.CYAN}{Color.BOLD}=== CONFIGURE BOT COUNT ==={Color.RESET}\n")
-            print("Options:")
-            print("  • Type 'A' or 'all' to use ALL accounts from the CSV")
-            print("  • Type a number (e.g. 5, 20, 50) for a custom count\n")
-            val = input(f"Enter choice [current: {bot_str}]: ").strip()
-            if val:
-                if val.lower() in ("a", "all"):
-                    cfg["bot_count"] = "all"
-                    print(f"\n{Color.GREEN}✓ Bot count set to ALL accounts.{Color.RESET}")
-                else:
-                    try:
-                        n = int(val)
-                        if n > 0:
-                            cfg["bot_count"] = n
-                            print(f"\n{Color.GREEN}✓ Bot count set to {n} bots.{Color.RESET}")
-                        else:
-                            print(f"{Color.RED}[!] Please enter a positive integer.{Color.RESET}")
-                    except ValueError:
-                        print(f"{Color.RED}[!] Invalid entry.{Color.RESET}")
-                save_config(cfg)
-                if pid:
-                    print(f"{Color.YELLOW}[!] Note: Restart the service ([3] then [1]) for new bot count to take effect.{Color.RESET}")
-                time.sleep(1.8)
-
-        elif choice == "5":
-            # Speed configuration
-            clear_screen()
-            print(f"{Color.CYAN}{Color.BOLD}=== CONFIGURE ANTI-MUTE PACING SPEED ==={Color.RESET}\n")
-            print(f"The HBU2 server enforces a 5.0s per-user rate limit (SPAM_FAST_MS).")
-            print(f"The default of {Color.GREEN}5.10s{Color.RESET} is the guaranteed maximum speed without being paused/muted.\n")
-            val = input(f"Enter minimum delay in seconds (>= 5.1) [current: {min_delay:.2f}s]: ").strip()
-            if val:
-                try:
-                    delay = float(val)
-                    if delay >= 5.1:
-                        cfg["min_delay_per_bot"] = delay
-                        cfg["max_delay_per_bot"] = delay + 0.15
-                        save_config(cfg)
-                        print(f"\n{Color.GREEN}✓ Delay updated to {delay:.2f}s per bot.{Color.RESET}")
-                    else:
-                        print(f"\n{Color.RED}[!] Value must be >= 5.1s to prevent server auto-mutes.{Color.RESET}")
-                except ValueError:
-                    print(f"\n{Color.RED}[!] Invalid number.{Color.RESET}")
-                time.sleep(1.8)
-
-        elif choice in ("t", "6"):
-            # Toggle Startup on Boot
-            new_state = toggle_autostart()
-            state_text = f"{Color.GREEN}ENABLED (Starts automatically on system boot){Color.RESET}" if new_state else f"{Color.YELLOW}DISABLED{Color.RESET}"
-            print(f"\n{Color.CYAN}[*] Startup on boot is now: {state_text}")
-            time.sleep(1.5)
-
-        elif choice in ("p", "7"):
-            # Check Script Progress
-            progress_screen()
-
-        elif choice in ("w", "8"):
-            # Open Web Dashboard
-            url = f"http://localhost:{dash_port}"
-            print(f"\n{Color.CYAN}[*] Opening {url} in your default browser...{Color.RESET}")
-            try:
-                webbrowser.open(url)
-            except Exception as e:
-                print(f"[!] Could not open browser: {e}")
-            time.sleep(1.2)
-
-        elif choice in ("l", "9"):
-            # View Logs
-            clear_screen()
-            print(f"{Color.CYAN}{Color.BOLD}=== RECENT LOGS ({LOG_FILE}) ==={Color.RESET}\n")
-            if os.path.exists(LOG_FILE):
-                try:
-                    res = subprocess.run(["tail", "-n", "25", LOG_FILE], capture_output=True, text=True, check=False)
-                    print(res.stdout)
-                except Exception:
-                    with open(LOG_FILE, "r", errors="replace") as f:
-                        lines = f.readlines()
-                        print("".join(lines[-25:]))
-            else:
-                print(f"{Color.DIM}No log file created yet.{Color.RESET}")
-            input(f"\n{Color.DIM}Press Enter to return to menu...{Color.RESET}")
+        launch_tui(sys.modules[__name__], start_tab=0)
+    except Exception as exc:
+        err_name = type(exc).__name__
+        print(
+            f"{Color.RED}[!] Failed to launch interactive TUI ({err_name}): {exc}{Color.RESET}\n"
+            f"{Color.DIM}Fallback: run './service.sh status' or './service.sh --help' for CLI controls.{Color.RESET}"
+        )
 
 # ==============================================================================
 # CLI Entry Point
@@ -572,6 +424,14 @@ def main():
 
     p_bots = subparsers.add_parser("bots", help="Set bot count")
     p_bots.add_argument("count", help="Number of bots or 'all'")
+
+    p_create = subparsers.add_parser("create", help="Batch create accounts via proxy rotator")
+    p_create.add_argument("count", type=int, default=10, nargs="?", help="Number of accounts to create (default: 10)")
+    p_create.add_argument("--threads", "-c", type=int, default=3, help="Worker threads")
+    p_create.add_argument("--direct", action="store_true", help="Force direct connection")
+
+    p_sync = subparsers.add_parser("sync", help="Sync all project files and code edits to GitHub")
+    p_sync.add_argument("message", nargs="?", default="feat: update lunamix fleet codebase and tools", help="Git commit message")
 
     args = parser.parse_args()
 
@@ -638,6 +498,16 @@ def main():
                 print(f"[!] Invalid count: {args.count}")
                 return
         save_config(cfg)
+    elif args.command == "create":
+        cmd = [sys.executable, os.path.join(BASE_DIR, "create_hbu_accounts.py"), "--count", str(args.count)]
+        if args.threads:
+            cmd.extend(["--threads", str(args.threads)])
+        if args.direct:
+            cmd.append("--direct")
+        subprocess.run(cmd)
+    elif args.command == "sync":
+        cmd = [sys.executable, os.path.join(BASE_DIR, "sync_to_github.py"), args.message]
+        subprocess.run(cmd)
 
 if __name__ == "__main__":
     main()
